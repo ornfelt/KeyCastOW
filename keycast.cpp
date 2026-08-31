@@ -69,6 +69,8 @@ WCHAR comboChars[4];
 POINT deskOrigin;
 
 #define MAXLABELS 60
+// keeps the default label position off the very bottom edge of the work area
+#define DEFAULT_BOTTOM_MARGIN 5
 KeyLabel keyLabels[MAXLABELS];
 DWORD maximumLines = 10;
 DWORD labelCount = 0;
@@ -95,6 +97,8 @@ Font * fontPlus = NULL;
 #define MENU_RESTORE   34
 
 void showText(LPCWSTR text, int behavior);
+void fixDeskOrigin();
+void saveSettings();
 
 #ifdef _DEBUG
 WCHAR capFile[MAX_PATH];
@@ -471,8 +475,12 @@ void GetWorkAreaByOrigin(const POINT &pt, MONITORINFO &mi) {
     GetMonitorInfo(hMonitor, &mi);
 }
 
-void positionOrigin(int action, POINT &pt) {
-    if (action == 0) {
+/*
+ * message is the mouse message driving the pick: WM_MOUSEMOVE previews the
+ * origin, WM_LBUTTONUP commits it, WM_RBUTTONUP cancels and keeps the old one.
+ */
+void positionOrigin(UINT message, POINT &pt) {
+    if (message == WM_MOUSEMOVE) {
         updateCanvasSize(pt);
 
         MONITORINFO mi;
@@ -495,13 +503,29 @@ void positionOrigin(int action, POINT &pt) {
         WCHAR tmp[256];
         swprintf(tmp, 256, L"%d, %d", pt.x, pt.y);
         showText(tmp, 2);
-    } else {
-        positioning = FALSE;
+        return;
+    }
+    if (message != WM_LBUTTONUP && message != WM_RBUTTONUP) {
+        // ignore the button down and wheel events that bracket the pick
+        return;
+    }
+    BOOL wasPositioning = positioning;
+    positioning = FALSE;
+    if (message == WM_LBUTTONUP) {
         deskOrigin.x = pt.x;
         deskOrigin.y = pt.y;
-        updateCanvasSize(pt);
-        clearColor.SetValue(0x007f7f7f);
-        gCanvas->Clear(clearColor);
+        fixDeskOrigin();
+        saveSettings();
+    }
+    clearColor.SetValue(0x007f7f7f);
+    updateCanvasSize(deskOrigin);
+    gCanvas->Clear(clearColor);
+    // the fade timer only repaints while a label is still alive, so push the
+    // cleared canvas and the new origin to the screen right away
+    updateLayeredWindow(hMainWnd);
+    if (wasPositioning) {
+        ShowWindow(hDlgSettings, SW_SHOW);
+        SetForegroundWindow(hDlgSettings);
     }
 }
 BOOL ColorDialog ( HWND hWnd, COLORREF &clr ) {
@@ -612,7 +636,7 @@ void fixDeskOrigin() {
         deskOrigin.x = desktopRect.right - labelSettings.borderSize;
     }
     if(deskOrigin.y > desktopRect.bottom || deskOrigin.y < desktopRect.top + labelSettings.borderSize) {
-        deskOrigin.y = desktopRect.bottom;
+        deskOrigin.y = desktopRect.bottom - DEFAULT_BOTTOM_MARGIN;
     }
 }
 void loadSettings() {
@@ -881,6 +905,8 @@ BOOL CALLBACK SettingsWndProc(HWND hwndDlg, UINT msg, WPARAM wParam, LPARAM lPar
                         showText(L"\u254b", 1);
                         fadeLastLabel(FALSE);
                         positioning = TRUE;
+                        // get the dialog out of the way of the area being picked
+                        ShowWindow(hwndDlg, SW_HIDE);
                     }
                     return TRUE;
                 case IDOK:
@@ -980,6 +1006,7 @@ LRESULT CALLBACK DraggableWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
 
 LRESULT CALLBACK WindowFunc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     static POINT s_last_mouse;
+    static BOOL s_dragged = FALSE;
     static HMENU hPopMenu;
     static NOTIFYICONDATA nid;
 
@@ -1096,6 +1123,7 @@ LRESULT CALLBACK WindowFunc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
         case WM_LBUTTONDOWN:
             SetCapture(hWnd);
             GetCursorPos(&s_last_mouse);
+            s_dragged = FALSE;
             showTimer.Stop();
             break;
         case WM_MOUSEMOVE:
@@ -1108,12 +1136,18 @@ LRESULT CALLBACK WindowFunc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
                 if (dx||dy)
                 {
                     s_last_mouse=p;
-                    positionOrigin(0, p);
+                    s_dragged = TRUE;
+                    positionOrigin(WM_MOUSEMOVE, p);
                 }
             }
             break;
         case WM_LBUTTONUP:
             ReleaseCapture();
+            if (s_dragged) {
+                // store the dragged origin, otherwise it snaps back on restart
+                s_dragged = FALSE;
+                positionOrigin(WM_LBUTTONUP, s_last_mouse);
+            }
             showTimer.Start(100);
             break;
         default:

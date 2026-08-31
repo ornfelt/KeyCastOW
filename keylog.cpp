@@ -177,7 +177,7 @@ extern WCHAR deferredLabel[64];
 HHOOK kbdhook, moshook;
 void showText(LPCWSTR text, int behavior = 0);
 void fadeLastLabel(BOOL weither);
-void positionOrigin(int action, POINT &pt);
+void positionOrigin(UINT message, POINT &pt);
 
 #ifdef _DEBUG
 #include <sstream>
@@ -377,6 +377,24 @@ LRESULT CALLBACK LLKeyboardProc(int nCode, WPARAM wp, LPARAM lp)
     return CallNextHookEx(kbdhook, nCode, wp, lp);
 }
 
+/*
+ * MSLLHOOKSTRUCT::pt is in physical pixels, while a DPI unaware process gets
+ * scaled coordinates from every other window API, so map the point into those.
+ * On a display without scaling both resolutions match and this is a no-op.
+ */
+void physicalToScaledPoint(POINT &pt) {
+    HDC hdc = GetDC(NULL);
+    int physicalW = GetDeviceCaps(hdc, DESKTOPHORZRES);
+    int physicalH = GetDeviceCaps(hdc, DESKTOPVERTRES);
+    int scaledW = GetDeviceCaps(hdc, HORZRES);
+    int scaledH = GetDeviceCaps(hdc, VERTRES);
+    ReleaseDC(NULL, hdc);
+    if(physicalW > 0 && physicalH > 0) {
+        pt.x = MulDiv(pt.x, scaledW, physicalW);
+        pt.y = MulDiv(pt.y, scaledH, physicalH);
+    }
+}
+
 LRESULT CALLBACK LLMouseProc(int nCode, WPARAM wp, LPARAM lp)
 {
     WCHAR c[64] = L"\0";
@@ -387,9 +405,16 @@ LRESULT CALLBACK LLMouseProc(int nCode, WPARAM wp, LPARAM lp)
     static DWORD mouseButtonDown = 0;
     static DWORD lastClick = 0;
     BOOL holdButton = FALSE;
-    if(positioning) {
+    if(positioning && nCode == HC_ACTION) {
         MSLLHOOKSTRUCT* ms = reinterpret_cast<MSLLHOOKSTRUCT*>(lp);
-        positionOrigin(idx, ms->pt);
+        POINT pt = ms->pt;
+        physicalToScaledPoint(pt);
+        positionOrigin((UINT)wp, pt);
+        if(wp != WM_MOUSEMOVE) {
+            // swallow the click that picks the position instead of letting it
+            // through to whatever window sits under the cursor
+            return 1;
+        }
     } else if ((mouseCapturing || mouseCapturingMod) && idx > 0 && idx < nMouseActions && nCode == HC_ACTION) {
         MSLLHOOKSTRUCT* ms = reinterpret_cast<MSLLHOOKSTRUCT*>(lp);
 
