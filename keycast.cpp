@@ -70,7 +70,7 @@ POINT deskOrigin;
 
 #define MAXLABELS 60
 // keeps the default label position off the very bottom edge of the work area
-#define DEFAULT_BOTTOM_MARGIN 5
+#define DEFAULT_BOTTOM_MARGIN 8
 KeyLabel keyLabels[MAXLABELS];
 DWORD maximumLines = 10;
 DWORD labelCount = 0;
